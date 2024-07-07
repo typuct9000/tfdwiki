@@ -2,7 +2,7 @@ import { parse as mwparse, type Template } from 'mwparser';
 import { getModuleData } from "./ApiData.js";
 import { initWiki, updateTemplateParams } from "./Utility.js";
 
-
+ 
 export async function updateModuleDescriptions()
 {
 	const data = await getModuleData();
