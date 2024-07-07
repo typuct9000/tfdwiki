@@ -3,10 +3,11 @@ import { getModuleData } from "./ApiData.js";
 import { initWiki, updateTemplateParams } from "./Utility.js";
 
 
-export async function updateModuleDescriptions()
+export async function updateModuleDescriptions(dryRun = true)
 {
 	const data = await getModuleData();
 
+	// Group modules with same name
 	const modules = new Map<string, typeof data>();
 	for (const module of data)
 	{
@@ -80,86 +81,86 @@ export async function updateModuleDescriptions()
 			return module.module_type === wikiValue || (module.module_type === null && (wikiValue === "" || wikiValue === undefined));
 		}
 
-		function findModuleVariantTemplate(module: typeof variants[0]) : Template | undefined
+		function findModuleVariantTemplates(module: typeof variants[0])
 		{
-			let result: Template | undefined = undefined;
-			for (const template of moduleTemplates)
-			{
-				if (checkClass(module, template) && checkRarity(module, template) /*&& checkCategory(module, template)*/)
-				{
-					if (result)
-					{
-						return undefined; // Non-unique module variant, figure out what to do later
-					}
-
-					result = template;
-				}
-			}
-
-			return result;
+			return moduleTemplates.filter((template) => checkClass(module, template) && checkRarity(module, template) /*&& checkCategory(module, template)*/);
 		}
 
 		const changedParams = new Set<string>();
+		const ambiguousVariants = new Set<string>();
 
 		for (let i = 0; i < variants.length; i++)
 		{
 			const module = variants[i]!;
 
 			// Multiple module templates per page - find which one to modify
-			const template = findModuleVariantTemplate(module);
-			if (template)
+			const templates = findModuleVariantTemplates(module);
+			if (templates.length === 1)
 			{
 				const params = {} as Record<string, string>;
 
 				for (const stat of module.module_stat)
 				{
-					if (stat.value.includes('\n'))
-					{
-						console.warn(`${name} has newline in description`);
-					}
-
-					params[`effect_${stat.level}`] = stat.value.replaceAll('\n', "<br/>");
+					// Rewrite newlines. Ignore \r here, since that is cleaned up later.
+					params[`effect_${stat.level}`] = stat.value.trim().replaceAll('\n', "<br/>");
 				}
 
 				//params["rarity"] = module.module_tier;
 				params["exclusive_category"] = module.module_type ?? "";
 
-				params["api_id"] = module.module_id;
-				params["api_image"] = module.image_url.slice(module.image_url.lastIndexOf('/') + 1);
+				//params["api_id"] = module.module_id;
+				//params["api_image"] = module.image_url.slice(module.image_url.lastIndexOf('/') + 1);
 
-				updateTemplateParams(template, params).forEach((i) => changedParams.add(i));
+				updateTemplateParams(templates[0]!, params).forEach((i) => changedParams.add(i));
+			}
+			else if (templates.length > 1)
+			{
+				needHumanReview = true;
+				ambiguousVariants.add(`${module.module_class}/${module.module_tier}`);
+				console.warn(`Ambiguous module variant ${module.module_name}/${module.module_class}/${module.module_tier}/${module.module_type}`);
 			}
 			else
 			{
 				needHumanReview = true;
-				reviewReason += `Ambiguous module variants ${module.module_class}/${module.module_tier} not handled. `;
-				console.warn(`Ambiguous module variant ${module.module_name}/${module.module_class}/${module.module_tier}/${module.module_type}`);
+				reviewReason += `Missing template for module variant ${module.module_class}/${module.module_tier}. `;
+				console.warn(`Page ${name} is missing template for module variant ${module.module_name}/${module.module_class}/${module.module_tier}/${module.module_type}`);
 			}
+		}
+
+		for (const variant of ambiguousVariants)
+		{
+			needHumanReview = true;
+			reviewReason += `Ambiguous module variants ${variant} not handled. `;
 		}
 
 		definitionsParam.value = parsedInner.toString();
 		let result = parsed.toString();
 
 		// Remove pre-release tag
-		result = result.replaceAll("{{PreReleaseData}}", "");
+		result = result.replace(/{{PreReleaseData}}\s*/, "").trim();
 
 		if (needHumanReview)
 		{
 			const template = parsed.templates.find((template) => checkTemplateName(template, "NeedsReview"));
 			if (!template)
 			{
-				console.warn(`Marking page ${name} for manual review`);
+				console.warn(`Marking page ${name} for manual review: ${reviewReason}`);
 				result += `\n{{NeedsReview|${reviewReason}}}`;
 			}
 		}
 
 		if (result !== pageText)
 		{
-			await page.save(result, `BOT EDIT: Update ${[...changedParams.values()].join(', ')}}`, { minor: false, bot: true, watch: false });
+			if (!dryRun)
+			{
+				await page.save(result, `BOT EDIT: Update ${[...changedParams.values()].join(', ')}}`, { minor: false, bot: true, watch: false });
+			}
 		}
 		else
 		{
 			console.log("No changes");
 		}
 	}
+
+	console.log("Done");
 }
